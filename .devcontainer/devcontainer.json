@@ -1,0 +1,75 @@
+{
+  "name": "Web Development Environment",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "workbench.startupEditor": "none",
+        "workbench.editor.tabSizing": "shrink",
+        "workbench.statusBar.visible": true,
+        "workbench.preferredLightColorTheme": "GitHub Light",
+        "workbench.preferredDarkColorTheme": "GitHub Dark Dimmed",
+        "workbench.sideBar.location": "right",
+        "workbench.editor.showTabs": "none",
+        "workbench.iconTheme": "fira-code-material-icon-theme",
+        "editor.fontFamily": "'Fira Code', Menlo, Monaco, 'Courier New', monospace",
+        "editor.fontLigatures": true,
+        "editor.fontSize": 14,
+        "editor.fontWeight": "500",
+        "editor.cursorBlinking": "expand",
+        "editor.cursorStyle": "line",
+        "editor.renderWhitespace": "boundary",
+        "editor.tabSize": 2,
+        "editor.smoothScrolling": true,
+        "editor.lineNumbers": "on",
+        "editor.minimap.enabled": false,
+        "editor.codeLens": false,
+        "editor.guides.bracketPairs": true,
+        "editor.wordWrap": "on",
+        "editor.bracketPairColorization.enabled": true,
+        "editor.rulers": [80, 120],
+        "files.autoSave": "onFocusChange",
+        "files.exclude": {
+          "**/.git": true,
+          "**/.DS_Store": true,
+          "**/node_modules": true
+        },
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "terminal.integrated.fontFamily": "JetBrains Mono",
+        "terminal.integrated.fontSize": 14,
+        "terminal.integrated.cursorStyle": "line",
+        "terminal.integrated.scrollback": 10000,
+        "terminal.integrated.tabs.enabled": false,
+        "git.autofetch": true,
+        "git.confirmSync": false,
+        "git.enableSmartCommit": true,
+        "gitlens.views.repositories.files.layout": "tree",
+        "prettier.tabWidth": 2,
+        "eslint.format.enable": true,
+        "editor.largeFileOptimizations": true,
+        "workbench.editor.enablePreview": false,
+        "breadcrumbs.enabled": false,
+        "explorer.openEditors.visible": 1,
+        "explorer.compactFolders": false,
+        "explorer.confirmDelete": false,
+        "debug.toolBarLocation": "hidden",
+        "notebook.showCellStatusBar": "hidden",
+        "workbench.activityBar.location": "hidden",
+        "workbench.colorCustomizations": {
+          "scrollbarSlider.activeBackground": "#00000050",
+          "scrollbarSlider.background": "#00000030",
+          "scrollbarSlider.hoverBackground": "#00000040"
+        }
+      },
+      "extensions": [
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "formulahendry.auto-close-tag",
+        "formulahendry.auto-rename-tag",
+        "dracula-theme.theme-dracula",
+        "aleleba.fira-code-material-icon-theme",
+        "ritwickdey.LiveServer"
+      ]
+    }
+  }
+}
