@@ -25,10 +25,6 @@
         "dracula-theme.theme-dracula",
         "aleleba.fira-code-material-icon-theme",
 
-        // Python Extensions
-        "ms-python.python",
-        "ms-python.vscode-pylance",
-
         // Terminal Utilities
         "formulahendry.auto-close-tag"
       ]
