@@ -41,29 +41,6 @@ def shorten_url(long_url: str) -> str:
         return response.text
     return long_url
 
-# Function to generate and send the direct download link for Instagram
-async def send_instagram_download_link(chat_id: int, link: str, context):
-    try:
-        # Use -f best to get the best available format (both video and audio combined)
-        command = ["yt-dlp", "-g", "-f", "best", link]
-        result = subprocess.run(command, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Error: {result.stderr.strip()} ⚠️")
-            logging.error(f"yt-dlp error: {result.stderr.strip()}")
-            return
-
-        direct_link = result.stdout.strip()
-        if direct_link:
-            short_link = shorten_url(direct_link)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🎉 Here is your direct download link:\n🔗 {short_link}\n\n📥 Open it in your browser or a download manager."
-            )
-    except Exception as e:
-        await context.bot.send_message(chat_id=chat_id, text=f"❗ An unexpected error occurred: {e} ❗")
-        logging.error(f"Unexpected error: {e}")
-
 # Function to fetch available formats for YouTube
 def fetch_formats(url: str) -> list:
     command = ["yt-dlp", "-F", "--cookies", "cookies.txt", url]
@@ -82,19 +59,27 @@ def fetch_formats(url: str) -> list:
             formats.append((format_id, resolution))
     return formats
 
-# Callback query handler for format selection
-async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# Function to generate and send the direct download link for Instagram
+async def send_instagram_download_link(chat_id: int, link: str, context):
+    try:
+        command = ["yt-dlp", "-g", link]
+        result = subprocess.run(command, capture_output=True, text=True)
 
-    data = query.data.split("|")
-    format_code = data[0]
-    unique_id = data[1]
-    chat_id = query.message.chat_id
+        if result.returncode != 0:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Error: {result.stderr.strip()} ⚠️")
+            logging.error(f"yt-dlp error: {result.stderr.strip()}")
+            return
 
-    # Inform user and process the download
-    await context.bot.send_message(chat_id=chat_id, text="📥 Generating your download link, please wait...")
-    await send_youtube_download_link(format_code, chat_id, URL_CACHE[unique_id], context)
+        direct_link = result.stdout.strip()
+        if direct_link:
+            short_link = shorten_url(direct_link)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎉 Here is your direct download link:\n🔗 {short_link}\n\n📥 Open it in your browser or a download manager."
+            )
+    except Exception as e:
+        await context.bot.send_message(chat_id=chat_id, text=f"❗ An unexpected error occurred: {e} ❗")
+        logging.error(f"Unexpected error: {e}")
 
 # Function to generate and send the direct download link for YouTube
 async def send_youtube_download_link(format_id: str, chat_id: int, link: str, context):
@@ -117,6 +102,20 @@ async def send_youtube_download_link(format_id: str, chat_id: int, link: str, co
     except Exception as e:
         await context.bot.send_message(chat_id=chat_id, text=f"❗ An unexpected error occurred: {e} ❗")
         logging.error(f"Unexpected error: {e}")
+
+# Callback query handler for format selection
+async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data.split("|")
+    format_code = data[0]
+    unique_id = data[1]
+    chat_id = query.message.chat_id
+
+    # Inform user and process the download
+    await context.bot.send_message(chat_id=chat_id, text="📥 Generating your download link, please wait...")
+    await send_youtube_download_link(format_code, chat_id, URL_CACHE[unique_id], context)
 
 # Message handler for YouTube/Instagram links
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
