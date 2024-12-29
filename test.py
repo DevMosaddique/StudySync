@@ -9,7 +9,20 @@ import requests
 import re
 import uuid
 import json
+import time
+import asyncio
 
+# Function to send progress updates
+async def send_progress_update(context, chat_id, message_id, task_duration=10):
+    for i in range(1, 101):
+        # Simulating a task by sleeping for some time
+        await asyncio.sleep(task_duration / 100)  # Adjust this duration according to your task
+        progress_text = f"Generating download links... {i}% complete"
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=progress_text)
+        except Exception as e:
+            logging.error(f"Failed to update message: {e}")
+            break
 
 # Load .env file
 load_dotenv()
@@ -121,20 +134,8 @@ async def delete_expired_message(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
         logging.info(f"Deleted expired message: {message_id} in chat: {chat_id}")
     except Exception as e:
-        logging.error(f"Failed to delete message: {e}")
+        asyncio.create_task(send_progress_update(context, chat_id, message.message_id, task_duration=10))
 
-# Function to send download link with expiration timer
-async def send_download_link_with_expiration(chat_id: int, text: str, context, expiration_seconds=86400):
-    message = await context.bot.send_message(chat_id=chat_id, text=text)
-    context.job_queue.run_once(
-        delete_expired_message,
-        when=expiration_seconds,
-        data={"chat_id": chat_id, "message_id": message.message_id},
-    )
-
-# Function to generate and send the direct download link for Instagram
-async def send_instagram_download_link(chat_id: int, link: str, context):
-    try:
         command = ["yt-dlp", "-g", "-f", "best", link]
         result = subprocess.run(command, capture_output=True, text=True)
 
@@ -150,15 +151,6 @@ async def send_instagram_download_link(chat_id: int, link: str, context):
                 chat_id=chat_id,
                 text=f"🎉 Here is your direct download link:\n🔗 {short_link}\n\n📥 Open it in your browser or a download manager."
             )
-
-            # Log the download in history
-            add_to_history(chat_id, link, "best")
-    except Exception as e:
-        await context.bot.send_message(chat_id=chat_id, text=f"❗ An unexpected error occurred: {e} ❗")
-        logging.error(f"Unexpected error: {e}")
-
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
     history = load_history()
 
     # Check if user has any history
