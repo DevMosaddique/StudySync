@@ -246,60 +246,68 @@ async def fetch_formats(url: str) -> list:
 # Function to generate and send the direct download link for YouTube
 async def send_youtube_download_link(format_id: str, chat_id: int, link: str, context, selected_quality: str):
     try:
-        # Fetch the direct download link
-        command = ["yt-dlp", "-g", "--cookies", "cookies.txt", "-f", format_id, link]
-        process = await asyncio.create_subprocess_exec(
-            *command,
+        # Create the downloads directory if it doesn't exist
+        downloads_dir = "downloads"
+        if not os.path.exists(downloads_dir):
+            os.makedirs(downloads_dir)
+
+        # Download the video
+        video_path = os.path.join(downloads_dir, f"video.{format_id}.mp4")
+        video_command = ["yt-dlp", "--cookies", "cookies.txt", "-f", format_id, "-o", video_path, link]
+        video_process = await asyncio.create_subprocess_exec(
+            *video_command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        await video_process.communicate()
 
-        if process.returncode != 0:
-            logging.error(f"Error fetching download link: {stderr.decode().strip()}")
-            await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
-            return
-
-        direct_link = stdout.decode().strip()
-        short_link = shorten_url(direct_link)
-
-        # Fetch video info to get the title and duration
-        video_info_command = ["yt-dlp", "-j", "--cookies", "cookies.txt", link]
-        process = await asyncio.create_subprocess_exec(
-            *video_info_command,
+        # Download the audio
+        audio_path = os.path.join(downloads_dir, f"audio.{format_id}.webm")
+        audio_command = ["yt-dlp", "--cookies", "cookies.txt", "-f", "bestaudio", "-o", audio_path, link]
+        audio_process = await asyncio.create_subprocess_exec(
+            *audio_command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        video_info_stdout, video_info_stderr = await process.communicate()
+        await audio_process.communicate()
 
-        if process.returncode != 0:
-            logging.error(f"Error fetching video info: {video_info_stderr.decode().strip()}")
+        if video_process.returncode != 0 or audio_process.returncode != 0:
+            logging.error(f"Error fetching download link.")
             await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
             return
 
-        video_info = json.loads(video_info_stdout.decode().strip())
-        video_title = video_info['title']
-        duration = video_info['duration']
+        # Merge video and audio using ffmpeg
+        merged_path = os.path.join(downloads_dir, f"{format_id}_merged.mp4")
+        ffmpeg_command = [
+            "ffmpeg", "-i", video_path, "-i", audio_path,
+            "-c:v", "copy", "-c:a", "aac", "-strict", "experimental", merged_path
+        ]
+        ffmpeg_process = subprocess.run(ffmpeg_command, capture_output=True)
 
-        message = (
-                f"🎥 *{video_title}* \n"
-                f"📺 Quality: *{selected_quality}*\n\n"
-                f"[Click here to download]({short_link})"
+        if ffmpeg_process.returncode != 0:
+            logging.error(f"Error merging video and audio: {ffmpeg_process.stderr.decode().strip()}")
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
+            return
+
+        # Send the merged video to the user
+        with open(merged_path, 'rb') as video_file:
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=video_file,
+                caption=f"🎥 *Merged Video*\n📺 Quality: *{selected_quality}*\n\n",
+                parse_mode='Markdown'
             )
 
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            parse_mode='Markdown'
-        )
+        # Clean up temporary files
+        os.remove(video_path)
+        os.remove(audio_path)
+        os.remove(merged_path)
 
         add_to_history(chat_id, link, format_id)
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON decode error: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
         await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an unexpected error occurred.")
+
 
 # Message handler for YouTube/Instagram links
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -514,3 +522,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
