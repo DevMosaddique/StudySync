@@ -9,24 +9,14 @@ import requests
 import re
 import uuid
 import json
-import time
 import asyncio
 
-# Function to send progress updates
-async def send_progress_update(context, chat_id, message_id, task_duration=10):
-    for i in range(1, 101):
-        # Simulating a task by sleeping for some time
-        await asyncio.sleep(task_duration / 100)  # Adjust this duration according to your task
-        progress_text = f"Generating download links... {i}% complete"
-        try:
-            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=progress_text)
-        except Exception as e:
-            logging.error(f"Failed to update message: {e}")
-            break
 
 # Load .env file
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+BITLY_API_KEY = os.getenv('BITLY_API_KEY')
+ADMIN_ID = os.getenv('ADMIN_ID')
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in .env file")
@@ -37,6 +27,16 @@ logging.basicConfig(level=logging.WARNING)
 # Temporary cache to store URLs and fetched formats
 URL_CACHE = {}
 FORMAT_CACHE = {}
+FORMAT_QUALITY_MAPPING = {
+    '18': '360p',
+    '22': '720p',
+    '37': '1080p',
+    '133': '240p',
+    '134': '360p',
+    '135': '480p',
+    '136': '720p',
+    '137': '1080p', # add more later 
+}
 
 # File path for download history
 HISTORY_FILE = "download_history.json"
@@ -107,9 +107,16 @@ def get_user_preference(user_id: int, preference_key: str = None, default_value:
 
 # Function to validate YouTube and Instagram links
 def is_valid_link(url: str) -> bool:
-    youtube_regex = r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+"
-    instagram_regex = r"(https?://)?(www\.)?instagram\.com/.+"
-    return bool(re.match(youtube_regex, url)) or bool(re.match(instagram_regex, url))
+    regex = re.compile(
+        r'^(?:http|ftp)s?://'  # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+        r'localhost|'  # localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...or ipv4
+        r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  # ...or ipv6
+        r'(?::\d+)?'  # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    
+    return re.match(regex, url) is not None
 
 # Normalize YouTube Shorts URL
 def normalize_url(url: str) -> str:
@@ -119,10 +126,16 @@ def normalize_url(url: str) -> str:
 
 # Function to shorten URL using TinyURL
 def shorten_url(long_url: str) -> str:
-    response = requests.get(f"https://tinyurl.com/api-create.php?url={long_url}")
-    if response.status_code == 200:
-        return response.text
-    return long_url
+    try:
+        response = requests.get(f"https://tinyurl.com/api-create.php?url={long_url}")
+        if response.status_code == 200:
+            return response.text
+        else:
+            logging.error(f"Error shortening URL: {response.status_code}")
+            return long_url
+    except Exception as e:
+        logging.error(f"Exception while shortening URL: {e}")
+        return long_url
 
 # Function to delete messages after expiration
 async def delete_expired_message(context: ContextTypes.DEFAULT_TYPE):
@@ -134,77 +147,159 @@ async def delete_expired_message(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
         logging.info(f"Deleted expired message: {message_id} in chat: {chat_id}")
     except Exception as e:
-        asyncio.create_task(send_progress_update(context, chat_id, message.message_id, task_duration=10))
+        logging.error(f"Failed to delete message: {e}")
 
+# Function to send download link with expiration timer
+async def send_download_link_with_expiration(chat_id: int, text: str, context, expiration_seconds=86400):
+    message = await context.bot.send_message(chat_id=chat_id, text=text)
+    context.job_queue.run_once(
+        delete_expired_message,
+        when=expiration_seconds,
+        data={"chat_id": chat_id, "message_id": message.message_id},
+    )
+
+# Function to generate and send the direct download link for Instagram
+async def send_instagram_download_link(chat_id: int, link: str, context):
+    try:
         command = ["yt-dlp", "-g", "-f", "best", link]
         result = subprocess.run(command, capture_output=True, text=True)
 
         if result.returncode != 0:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Error: {result.stderr.strip()} ⚠️")
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
             logging.error(f"yt-dlp error: {result.stderr.strip()}")
             return
 
         direct_link = result.stdout.strip()
         if direct_link:
             short_link = shorten_url(direct_link)
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"🎉 Here is your direct download link:\n🔗 {short_link}\n\n📥 Open it in your browser or a download manager."
+
+            # Fetch video info to get the title and caption
+            video_info_command = ["yt-dlp", "-j", "--cookies", "cookies.txt", link]
+            process = await asyncio.create_subprocess_exec(
+                *video_info_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-    history = load_history()
+            video_info_stdout, video_info_stderr = await process.communicate()
 
-    # Check if user has any history
-    user_history = history.get(str(chat_id), [])
-    if not user_history:
-        await context.bot.send_message(chat_id=chat_id, text="📜 No download history found!", parse_mode='Markdown')
-        return
+            if process.returncode != 0:
+                logging.error(f"Error fetching video info: {video_info_stderr.decode().strip()}")
+                await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
+                return
 
-    # Send the first page
-    await send_history_page(chat_id, user_history, 0, context)
+            video_info = json.loads(video_info_stdout.decode().strip())
+            video_title = video_info['title']
+            video_caption = video_info.get('description', 'No caption available')
 
-# Function to fetch available formats for YouTube
-def fetch_formats(url: str) -> list:
-    command = ["yt-dlp", "-F", "--cookies", "cookies.txt", url]
-    result = subprocess.run(command, capture_output=True, text=True)
+            # Remove hashtags and associated words from the caption
+            clean_caption = re.sub(r'#\w+', '', video_caption)
+            # Remove excessive symbols and spaces
+            clean_caption = re.sub(r'[\.\-\*]+', '', clean_caption)  # Remove symbols
+            clean_caption = re.sub(r'\s*\n\s*\n\s*', '\n\n', clean_caption).strip()  # Remove excessive spaces
 
-    if result.returncode != 0:
-        logging.error(f"yt-dlp error: {result.stderr.strip()}")
-        return None
+            message = (
+                f"🎥 *{video_title}*\n"
+                f"📺 Quality: *Best*\n"
+                f"📝 Caption: {clean_caption}\n\n"
+                f"[Click here to download]({short_link})\n\n"
+            )
 
-    formats = []
-    for line in result.stdout.splitlines():
-        if re.match(r"^\d+", line):  # Format lines start with a number
-            parts = line.split()
-            format_id = parts[0]
-            resolution = " ".join(parts[1:])  # Combine remaining parts for resolution/quality
-            formats.append((format_id, resolution))
-    return formats
-
-# Function to generate and send the direct download link for YouTube
-async def send_youtube_download_link(format_id: str, chat_id: int, link: str, context):
-    try:
-        command = ["yt-dlp", "-g", "--cookies", "cookies.txt", "-f", format_id, link]
-        result = subprocess.run(command, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Error: {result.stderr.strip()} ⚠️")
-            logging.error(f"yt-dlp error: {result.stderr.strip()}")
-            return
-
-        direct_link = result.stdout.strip()
-        if direct_link:
-            short_link = shorten_url(direct_link)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"🎉 Here is your direct download link:\n🔗 {short_link}\n\n📥 Open it in your browser or a download manager."
+                text=message,
+                parse_mode='Markdown'
             )
 
             # Log the download in history
-            add_to_history(chat_id, link, format_id)
+            add_to_history(chat_id, link, "best")
     except Exception as e:
-        await context.bot.send_message(chat_id=chat_id, text=f"❗ An unexpected error occurred: {e} ❗")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an unexpected error occurred.")
         logging.error(f"Unexpected error: {e}")
 
+# Function to fetch available formats for YouTube
+async def fetch_formats(url: str) -> list:
+    try:
+        command = ["yt-dlp", "-F", "--cookies", "cookies.txt", url]
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logging.error(f"yt-dlp error: {stderr.decode().strip()}")
+            return None
+
+        formats = []
+        for line in stdout.decode().splitlines():
+            if re.match(r"^\d+", line):  # Format lines start with a number
+                parts = line.split()
+                format_id = parts[0]
+                resolution = " ".join(parts[1:])  # Combine remaining parts for resolution/quality
+                formats.append((format_id, resolution))
+        return formats
+    except Exception as e:
+        logging.error(f"Error fetching formats: {e}")
+        return None
+
+# Function to generate and send the direct download link for YouTube
+async def send_youtube_download_link(format_id: str, chat_id: int, link: str, context, selected_quality: str):
+    try:
+        # Fetch the direct download link
+        command = ["yt-dlp", "-g", "--cookies", "cookies.txt", "-f", format_id, link]
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logging.error(f"Error fetching download link: {stderr.decode().strip()}")
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
+            return
+
+        direct_link = stdout.decode().strip()
+        short_link = shorten_url(direct_link)
+
+        # Fetch video info to get the title and duration
+        video_info_command = ["yt-dlp", "-j", "--cookies", "cookies.txt", link]
+        process = await asyncio.create_subprocess_exec(
+            *video_info_command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        video_info_stdout, video_info_stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logging.error(f"Error fetching video info: {video_info_stderr.decode().strip()}")
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
+            return
+
+        video_info = json.loads(video_info_stdout.decode().strip())
+        video_title = video_info['title']
+        duration = video_info['duration']
+
+        message = (
+                f"🎥 *{video_title}* \n"
+                f"📺 Quality: *{selected_quality}*\n\n"
+                f"[Click here to download]({short_link})"
+            )
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode='Markdown'
+        )
+
+        add_to_history(chat_id, link, format_id)
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON decode error: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an error occurred while processing your request.")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Sorry, an unexpected error occurred.")
 
 # Message handler for YouTube/Instagram links
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -218,17 +313,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = normalize_url(text)
 
     if "instagram.com" in link:
-        await context.bot.send_message(chat_id=chat_id, text="🔍 Fetching your download link, please wait...")
+        message = await context.bot.send_message(chat_id=chat_id, text="🔍 Fetching your download link, please wait...")
         await send_instagram_download_link(chat_id, link, context)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     else:
-        await context.bot.send_message(chat_id=chat_id, text="🔍 Fetching available formats, please wait...")
-        formats = fetch_formats(link)
+        message = await context.bot.send_message(chat_id=chat_id, text="🔍 Fetching available formats, please wait...")
+        formats = await fetch_formats(link)
 
         if not formats:
             await context.bot.send_message(chat_id=chat_id, text="⚠️ Failed to fetch available formats. Please try again.", parse_mode='Markdown')
+            await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             return
 
-        # Update handle_message to pass preference key
         default_quality = get_user_preference(chat_id, "default_quality")
 
         # Filter and organize available formats
@@ -248,11 +344,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check if user's default quality is available
         if default_quality and default_quality in filtered_formats:
             format_id = filtered_formats[default_quality]
-            await context.bot.send_message(
+            await context.bot.edit_message_text(
                 chat_id=chat_id,
-                text=f"🎥 Using your default preference: *{default_quality}*. Generating download link..."
+                message_id=message.message_id,
+                text=f"🎥 Using your default preference: *{default_quality}*. Generating download link...",
+                parse_mode='Markdown'
             )
-            await send_youtube_download_link(format_id, chat_id, link, context)
+            await send_youtube_download_link(format_id, chat_id, link, context, default_quality)
+            await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
             return
 
         # Cache unique ID and formats
@@ -265,7 +364,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = []
         for resolution, format_id in filtered_formats.items():
             button_text = "Best Quality Audio" if resolution == 'best_audio' else resolution
-            row.append(InlineKeyboardButton(button_text, callback_data=f"{format_id}|{unique_id}"))
+            row.append(InlineKeyboardButton(button_text, callback_data=f"{format_id}|{unique_id}|{resolution}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -274,11 +373,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Ask the user to select a format
-        await context.bot.send_message(
+        # Edit the message to show the format selection
+        await context.bot.edit_message_text(
             chat_id=chat_id,
+            message_id=message.message_id,
             text="🎥 Select the desired format for your download:",
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
         )
 
 # Start command handler
@@ -333,15 +434,16 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
 
     data = query.data.split("|")
-    if len(data) == 2:
+    if len(data) == 3:
         format_code = data[0]
         unique_id = data[1]
+        selected_quality = data[2]
         chat_id = query.message.chat_id
 
-        #unique id check 
         if unique_id in URL_CACHE:
-            await context.bot.send_message(chat_id=chat_id, text="📥 Generating your download link, please wait...", parse_mode='Markdown')
-            await send_youtube_download_link(format_code, chat_id, URL_CACHE[unique_id], context)
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=query.message.message_id, text="📥 Generating your download link, please wait...", parse_mode='Markdown')
+            await send_youtube_download_link(format_code, chat_id, URL_CACHE[unique_id], context, selected_quality)
+            await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
         else:
             await context.bot.send_message(chat_id=chat_id, text="⚠️ Error: Invalid selection. Please try again.", parse_mode='Markdown')
 
